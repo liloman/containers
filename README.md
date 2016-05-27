@@ -242,7 +242,7 @@ Mola, ¿no?.
 
 Mi objetivo era instalar un container con debian armhf y compilar en el el software que necesitaba y por supuesto necestivaba internet. Como se verá mas adelante todo un fail porque qemu-arm-static no dispone de netlink así que hagas lo que hagas no vas a tener connectividad en el container... :(
 
-Lo primero que necesitas para correr armhf en x86 es un emulador y que sea estático, en fedora solo se destribuye qemu-arm (dinámico) y el estático tienes que bajartelo & compilartelo tu mismo y para ello necesitas una maquina de 32bits a ser posible. Aprovecharemos pues la maquina recien instalada... ;)
+Lo primero que necesitas para correr armhf en x86 es un emulador y que sea estático, en fedora solo se destribuye qemu-arm (dinámico) y el estático tienes que bajartelo & compilartelo tu mismo y para ello necesitas una maquina de 32bits a ser posible. Aprovecharemos pues la maquina recien instalada o bien el mio ya preparado [qemu-arm-static](./qemu-arm-static). ;)
 
 ```bash
 $lxc-start -n fedora386
