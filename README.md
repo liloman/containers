@@ -96,6 +96,7 @@ $ip addr show virbr0
 Lo siguiente que necesitamos es algo que asigne dinamicamente las ips a los guests o bien fijarlas en el archivo de configuracion. Para lo primero lanzando esto:
 
 
+```bash
 /sbin/dnsmasq \
         --dhcp-leasefile=/var/run/lxc-dnsmasq.leases \
         --user=nobody \
@@ -105,6 +106,7 @@ Lo siguiente que necesitamos es algo que asigne dinamicamente las ips a los gues
         --except-interface=lo \
         --bind-interfaces \
         --dhcp-range=10.0.3.2,10.0.3.254
+```
 
 Para lo segundo (ip estática):
 
