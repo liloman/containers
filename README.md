@@ -7,7 +7,7 @@ Pues bien he probado "bastantes" tecnologías todos estos años pero siempre gua
 
 Este documento lo queria escribir desde hace mucho tiempo pues al ir probando, vas averiguando cosas nuevas y siempre hace falta algun sitio para reunirlas todas y creo que este va a ser. 
 
-De todo lo que he probado/usado la mas innovadora ha sido sin duda SELinux seguida de systemd-nspawn, aunque me gusta bastante lxc o libvirt para containers seguros. 
+De todo lo que he probado/usado la mas innovadora ha sido sin duda SELinux seguida de systemd-nspawn, aunque me gusta bastante lxc o libvirt para containers seguros o el reciente Clear containers de intel que hace uso de kvmtool/DAX intensivamente. 
 
 
 ##LXC
@@ -20,10 +20,12 @@ $dnf install lxc
 
 Para preparlo para un posible uso de libvirt editar /etc/lxc/default.conf y cambiar 'lxc.network.link' de 'lxcbr0' a 'virbr0':
 
+```bash
 lxc.network.type = veth
 lxc.network.link = virbr0
 lxc.network.flags = up
 lxc.network.hwaddr = 00:16:3e:xx:xx:xx
+```
 
 ###Instalar Fedora 23 x86_32 en Fedora 23 x86_64
 
@@ -297,6 +299,54 @@ Linux jessie 4.4.7-300.fc23.x86_64 #1 SMP Wed Apr 13 02:52:52 UTC 2016 armv7l GN
 
 En resumen NO hay network en LXC para arm porque qemu-arm-static todavia no soporta netlink, ni mount, ni ptrace ...
 
+##QEMU
 
+###Allwinner A20 (armhf/armv7)  on X86_64
 
+Queremos emular un A20 AllWinner(una machine vexpress-a9 en qemu) concretamente para una Olinuxino Lime2.
 
+Lo podriamos hacer para fedora del siguiente modo, notese que partimos de Fedora minimal y que utilizamos un dtb de vexpress-a15 que nos permitirá utilizar el doble de RAM.
+
+```bash
+cd /var/lib/lxc
+$wget -c -nc https://ftp.fau.de/fedora/linux/releases/23/Images/armhfp/Fedora-Minimal-armhfp-23-10-sda.raw.xz
+$unxz Fedora-Minimal-armhfp-23-10-sda.raw.xz 
+$wget -c -nc https://dl.fedoraproject.org/pub/fedora/linux/releases/23/Server/armhfp/os/images/pxeboot/dtb/vexpress-v2p-ca15-tc1.dtb
+```
+
+Ahora necesitamos obtener el kernel y el initrd, facilmente:
+
+```bash
+$dnf install -y qemu-system-arm
+$kpartx -av Fedora-Minimal-armhfp-23-10-sda.raw
+add map loop0p1 (253:3): 0 585728 linear /dev/loop0 2048
+add map loop0p2 (253:4): 0 499712 linear /dev/loop0 587776
+add map loop0p3 (253:5): 0 2344960 linear /dev/loop0 1087488
+$mkdir /tmp/boot
+$mount /dev/mapper/loop0p1 /tmp/boot
+$cp /tmp/boot/initramfs-4.2.3-300.fc23.armv7hl.img .
+$cp /tmp/boot/vmlinuz-4.2.3-300.fc23.armv7hl .
+$umount /tmp/boot
+$kpartx -dv Fedora-Minimal-armhfp-23-10-sda.raw 
+del devmap : loop0p3
+del devmap : loop0p2
+del devmap : loop0p1
+loop deleted : /dev/loop0
+```
+
+Ahora hace falta juntarlo todo para arrancar la maquina, recordad que en vez de usar vexpress-a9 usaremos vexpress-a15 que permite el doble de RAM. ;)
+
+```bash
+qemu-system-arm -machine vexpress-a15 -m 2048 -nographic -net nic -net user \
+        -append "console=ttyAMA0,115200n8 rw root=/dev/mmcblk0p3 rootwait physmap.enabled=0" \
+        -kernel vmlinuz-4.2.3-300.fc23.armv7hl  \
+        -initrd initramfs-4.2.3-300.fc23.armv7hl.img \ 
+        -sd  Fedora-Minimal-armhfp-23-10-sda.raw  \
+        -dtb vexpress-v2p-ca15-tc1.dtb
+```
+
+O si quereis preferis usar el script le podeis pasar --m=800 para ajustar la RAM si no disponeis de suficiente libre. ;)
+
+```bash
+./boot-vexpress.sh --kernel=vmlinuz-4.2.3-300.fc23.armv7hl --ramfs=initramfs-4.2.3-300.fc23.armv7hl.img --image=Fedora-Minimal-armhfp-23-10-sda.raw -dtb=vexpress-v2p-ca15-tc1.dtb --m=800
+```
