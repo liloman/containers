@@ -382,6 +382,18 @@ Comprobemoslo:
       guest_t
       local_login_t
       ..._t
+[root@localhost ~]# seinfo -thttpd_sys_rw_content_t -x
+   httpd_sys_rw_content_t
+      httpdcontent
+      httpd_content_type
+      file_type
+      non_auth_file_type
+      non_security_file_type
+   Aliases
+      httpd_sys_script_rw_t
+      httpd_sys_content_rw_t
+      httpd_fastcgi_rw_content_t
+      httpd_fastcgi_script_rw_t
 ```
 
 Bien pues dicho lo cual vamos a ver que permisos tiene un tipo en concreto. Veamos el home_cert_t que parece ser algo relativo a los certificados. :)
@@ -620,38 +632,86 @@ Probemos a modificar el contexto a mano:
 [uselinux@localhost ~]$ restorecon -vR .mpd/
 restorecon reset /home/uselinux/.mpd context user_u:object_r:mpd_home_t:s0->user_u:object_r:mozilla_home_t:s0
 ```
+Pues efectivamente funciona.
 
-Pues efectivamente funciona. Pasemos a algo mas complicado que ¿tal si creamos un directorio donde ni tan siquiera root pueda acceder?
+##Modulo con nuevo tipo
 
-```bash
-[root@localhost ~]# id -Z
-unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023
-[root@localhost super_privado]# semanage fcontext -a -t super_privado_t "/home/uselinux/super_privado(/.*)?"
-
-```
-
-Estamos corriendo a root como unconfined_u/r/t, se trata de un user/rol/tipo el cual tiene todo permitido pero esto es selinux por lo que lo no este explicitamente permitido es denegado, por lo que si creamos un tipo nuevo incluso root lo tendrá denegado a no ser que le demos permiso.
-
+Pasemos a algo mas complicado que ¿tal si creamos un nuevo tipo de files/dirs ?
 
 ```bash
 [root@localhost ~]# seinfo -tsuper_privado_t
 ERROR: could not find datum for type super_privado_t
+[root@localhost ~]# cd /usr/share/selinux/packages/
+[root@localhost packages]# mkdir super_privado ; cd super_privado
+[root@localhost super_privado]# ln -s /usr/share/selinux/devel/Makefile .
+[root@localhost super_privado]# vi super_privado.te
+policy_module(super_privado, 1.0)
+
+#se importa cualquier tipo que se vaya a usar en el modulo
+gen_require(`
+  type user_t;
+  type user_home_dir_t;
+')
+
+#definimos un tipo nuevo
+type super_privado_t;
+#lo hacemos tipo file/dir
+files_type(super_privado_t)
+
+
+#le ponemos todos los file permissions (seinfo -cfile -x ;) )
+allow user_t super_privado_t:file { append create execute write relabelfrom link unlink ioctl getattr setattr read rename lock relabelto mounton quotaon swapon audit_access entrypoint execmod execute_no_trans open };
+#todos los dir permissions igual que el file (no chiquitas ;) )
+allow user_t super_privado_t:dir { append create execute write relabelfrom link unlink ioctl getattr setattr read rename lock relabelto mounton quotaon swapon rmdir audit_access remove_name add_name reparent execmod search open };
+
+#name transition  ( para los fichero creados ) 
+#si el user_t crea un dir llamado "super_privado" en un directorio que 
+#tenga etiqueta "user_home_dir_t" este se creará con el tipo super_privado_t
+type_transition user_t user_home_dir_t : dir super_privado_t "super_privado";
+[root@localhost super_privado]# vi super_privado.fc
+#para el restorecon solamente
+/home/uselinux/super_privado(/.*)?  gen_context(user_u:object_r:super_privado_t,s0)
+[root@localhost super_privado]# make
+Compiling targeted super_privado module
+/usr/bin/checkmodule:  loading policy configuration from tmp/super_privado.tmp
+/usr/bin/checkmodule:  policy configuration loaded
+/usr/bin/checkmodule:  writing binary representation (version 17) to tmp/super_privado.mod
+Creating targeted super_privado.pp policy package
+rm tmp/super_privado.mod.fc tmp/super_privado.mod
+[root@localhost super_privado]# semodule -v -i super_privado.pp
+Attempting to install module 'super_privado.pp':
+Ok: return value of 0.
+Committing changes:
+Ok: transaction number 0.
+[root@localhost super_privado]# seinfo -tsuper_privado_t -x
+   super_privado_t
+      file_type
+      non_auth_file_type
+      non_security_file_type
+[uselinux@localhost ~]$ mkdir super_privado
+[uselinux@localhost ~]$ ls -dZ super_privado/
+user_u:object_r:super_privado_t:s0 super_privado/
+[uselinux@localhost ~]$ touch super_privado/prueba
+[uselinux@localhost ~]$ ls -Z super_privado/
+user_u:object_r:super_privado_t:s0 prueba
+[uselinux@localhost ~]$ chcon -t user_home_t super_privado/
+[uselinux@localhost ~]$ restorecon -v super_privado/
+restorecon reset /home/uselinux/super_privado context user_u:object_r:user_home_t:s0->user_u:object_r:super_privado_t:s0
 ```
 
-Asi que si asociamos al tipo super_privado_t ningun atributo ya establecido del sistema los unconfined_r no tendrán permisos tampoco. :)
+Han ocurrido un monton de cosas nuevas, pero digamos que se ha creado un nuevo modulo que alberga un nuevo tipo de objetos file/dir, el cual tiene un transición de nombre y un fichero de contexto asociado. Seguidamente se instala y se comprueba que funciona tanto la transición de nombre (mkdir/touch/...) como el fichero de contexto (restorecon). :)
 
+Destacar que si se crea un objeto sin una regla explicitamente asociada este herederá el tipo del directorio padre, de ahí que en el .te hayamos usado el tipo user_home_dir_t y de ahí que los objetos creados en super_privado/ tenga el mismo tipo que su directorio padre por defecto (super_privado_t) . ;)
 
-
-
-
-
-
-
-
-
+Este concepto es muy importante pues es muy similar al concepto de que un fork hereda de su padre todos sus recursos, esto permitía a cualquier proceso apagar la máquina gracias al fd del init, esto pasó desapercibido por mucho años hasta que se descubrió justamente analizando las transiciones de selinux con sus padres. ;)
 
 
 ##Transiciones
+
+Con las nociones básicas sobre usuarios/roles/tipos (obviando completamente toda la parte que sigue a los contextos de MLS/MCS por ahora ;) ) y las nociónes básicas de creación de un nuevo tipo, veamos a ver lo que son las transiciones.
+
+
+
 
 
 
