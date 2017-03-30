@@ -706,9 +706,130 @@ Destacar que si se crea un objeto sin una regla explicitamente asociada este her
 Este concepto es muy importante pues es muy similar al concepto de que un fork hereda de su padre todos sus recursos, esto permitía a cualquier proceso apagar la máquina gracias al fd del init, esto pasó desapercibido por mucho años hasta que se descubrió justamente analizando las transiciones de selinux con sus padres. ;)
 
 
+Digamos que se ha creado el modulo sin utilizar ninguna macro, por lo cual no es del todo flexible. Las macros permiten realizar funciones tipicas como definir permisos de un directorio de rw o generar un nuevo rol de usuario por ejemplo.
+
+Para poder saber que macros existen hay que bajarse la policy de referencia de:
+git clone https://github.com/TresysTechnology/refpolicy  --depth 1
+Y nos importan los ficheros que existen en policy/modules y muy especialmente en policy/support.
+
+En support/obj_perm_sets.spt podemos encontrar:
+define(`manage_dir_perms',`{ create open getattr setattr read write link unlink rename search add_name remove_name reparent rmdir lock ioctl }')
+define(`manage_file_perms',`{ create open getattr setattr read write append rename link unlink ioctl lock }')
+
+
+Los cuales te ahorran de tener que meter todos esos permisos a mano. Hagamos la prueba cambiando: 
+
+```bash
+[root@localhost super_privado]# vi super_privado.te
+policy_module(super_privado, 1.0)
+
+#se importa cualquier tipo que se vaya a usar en el modulo
+gen_require(`
+  type user_t;
+  type user_home_dir_t;
+')
+
+#definimos un tipo nuevo
+type super_privado_t;
+#lo hacemos tipo file/dir
+files_type(super_privado_t)
+
+
+#file permissions usando macros
+allow user_t super_privado_t:file { manage_file_perms };
+#dir permissions 
+allow user_t super_privado_t:dir { manage_dir_perms };
+
+#name transition  ( para los fichero creados ) 
+#si el user_t crea un dir llamado "super_privado" en un directorio que 
+#tenga etiqueta "user_home_dir_t" este se creará con el tipo super_privado_t
+type_transition user_t user_home_dir_t : dir super_privado_t "super_privado";
+[root@localhost super_privado]# make && semodule -v -i super_privado.pp
+[uselinux@localhost ~]$ mkdir super_privado
+[uselinux@localhost ~]$ ll super_privado
+drwxrwxr-x. 2 uselinux uselinux user_u:object_r:super_privado_t:s0     6 Mar 23 18:30 super_privado
+[uselinux@localhost ~]$ touch super_privado/kkk
+[uselinux@localhost ~]$ ll super_privado/kkk
+-rw-rw-r--. 1 uselinux uselinux user_u:object_r:super_privado_t:s0   0 Mar 23 18:31 kkk
+[uselinux@localhost ~]$ mv super_privado super2
+[uselinux@localhost ~]$ rmdir super2 
+[uselinux@localhost ~]$ mkdir super_privado
+[uselinux@localhost ~]$ chcon -t user_home_t super_privado/
+chcon: failed to change context of 'super_privado/' to ‘user_u:object_r:user_home_t:s0’: Permission denied
+```
+Es decir podemos hacer las operaciones normales excepto cambiarle el tipo con chcon, se soluciona facilmente agregandole la macro relable_file/dir_perms.
+
+allow user_t super_privado_t:file { manage_file_perms relabel_file_perms };
+allow user_t super_privado_t:dir { manage_dir_perms relabel_dir_perms };
+
+
+O directamente se podria simplemnte usar, bastante mas corto:
+userdom_user_home_content(super_privado_t)
+
+Igualmente esto:
+type_transition user_t user_home_dir_t : dir super_privado_t "super_privado";
+
+podría ser substitutiodo por :
+userdom_user_home_dir_filetrans(user_t, super_privado_t, dir, "super_privado")
+
+Por lo tanto la te se resumiría en:
+
+```bash
+[root@localhost super_privado]# vi super_privado.te
+policy_module(super_privado, 1.0)
+
+#se importa cualquier tipo que se vaya a usar en el modulo
+gen_require(`
+  type user_t;
+')
+
+#definimos un tipo nuevo
+type super_privado_t;
+
+#1- Se crea la transicion de tipo nombrada
+userdom_user_home_dir_filetrans(user_t, super_privado_t, dir, "super_privado")
+
+#2- Se estable de tipo FS en $HOME y se le dan permisos
+userdom_user_home_content(super_privado_t)
+
+[root@localhost super_privado]# vi super_privado.fc
+#para el restorecon solamente
+/home/uselinux/super_privado(/.*)?     gen_context(user_u:object_r:super_privado_t,s0)
+```
+
+
+
+
 ##Transiciones
 
-Con las nociones básicas sobre usuarios/roles/tipos (obviando completamente toda la parte que sigue a los contextos de MLS/MCS por ahora ;) ) y las nociónes básicas de creación de un nuevo tipo, veamos a ver lo que son las transiciones.
+###Transicion de tipo
+Con las nociones básicas sobre usuarios/roles/tipos (obviando completamente toda la parte que sigue a los contextos de MLS/MCS por ahora ;) ) y las nociónes básicas de creación de un nuevo tipo, veamos a ver lo que son las transiciones. Realmente ya hemos visto un tipo de transicion que son las de tipo para la realización del modulo anterior, concretamente al haber establecido la creación de un directorio con un determinado nombre se llamann transición de tipo con nombre.
+
+La necesidad es sencilla, simplemente cuando un dominio (tipo de proceso) quiera operar sobre un objeto con otro tipo es necesario definir todo el proceso porque sino será denegado. 
+En este caso lo que hicimos fue permitirle al user_t crear ficheros y directorio con el tipo super_privado_t y como segundario establecimos que si un proceso user_t creaba un directorio con el nombre super_privado en un directorio con etiqueta user_home_dir_t este tendrá la etiqueta super_privado_t y así mismo al usarse el comando restorecon sobre dicho directorio este tambien debería establecer dicha etiqueta.El problema es que no he conseguido que tambien funcione en sus ficheros internos.
+
+
+```bash
+[uselinux@localhost ~]$ mkdir -p super_privado/hola
+[uselinux@localhost ~]$ chcon -Rt user_home_t super_privado
+[uselinux@localhost ~]$ restorecon -Rv super_privado/
+restorecon reset /home/uselinux/super_privado context user_u:object_r:user_home_t:s0->user_u:object_r:super_privado_t:s0
+```
+
+TODO: No he encontrado forma alguna de que restorecon tambien al dir hola.
+manage_files_pattern(user_t, super_privado_t, super_privado_t)
+
+
+###Transición de proceso (dominio)
+
+El siguiente tipo de transición es aquella en la cual un tipo de proceso(dominio) ejecuta un tipo de objeto y se produce un transición hacia un nuevo tipo de proceso. (dominio)
+
+Es decir si queremos que los bash scripts que se guarden en super_privado/ se ejecuten en el dominio super_privado_sh_t es necesario establecer una transición de dominio.
+
+
+
+
+
 
 
 
